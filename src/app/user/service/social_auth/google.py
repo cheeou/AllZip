@@ -1,8 +1,6 @@
 import httpx
 from typing import Optional
 from fastapi import HTTPException, Response
-
-
 from src.app.user.service.social_auth.base import SocialAuthBase
 from src.app.user.service.user import UserService
 from src.core.config import settings
@@ -156,46 +154,32 @@ class GoogleOAuthService(SocialAuthBase):
         # 검증 완료, 새 사용자로 등록 가능
         return None
 
-    async def register_social_user(self, session: postgres_session, data: SocialUserInfoResponse) -> User:
-        """
-        새 사용자 등록을 수행
-        """
-        return await self.social_user_repository.create(
-            session=session,
-            instance_data={
-                "email": data.email,
-                "username": data.username,
-                "social_provider": data.social_provider,
-                "social_id": data.social_id,
-                "profile": data.profile.dict() if data.profile else {},
-            }
+    async def register_social_user(self, code: str, session: postgres_session) -> User:
+        data = await self.get_user_info(code)
+
+        existing_user = await self._validate_user_info(session, data)
+
+        if existing_user:
+            # 2-2. login 기능 구현 필요
+            raise HTTPException(
+                status_code=409,
+                detail="User is already registered with this social account."
+            )
+
+        social_user_register_data = SocialUserRegisterDTO(
+            email=data.email,
+            username=data.username,
+            user_type=UserType.social,
+            social_provider=SocialProvider.google,
+            social_id=data.social_id,
+            profile=PartialProfileDto(
+                sex=data.profile.sex,
+                birthday=data.profile.birthday,
+                profile=data.profile.profile,
+                bio=data.profile.bio,
+                link=data.profile.link,
+            ),
         )
 
-    async def handle_google_auth(self, session: postgres_session, code: str, response: Response,user_service: UserService):
-        """
-        Google OAuth 인증 및 JWT 응답 생성
-
-        Args:
-            session: 데이터베이스 세션
-            code: Google OAuth 인증 코드
-            response: FastAPI Response 객체 (쿠키 설정 용도)
-            user_service: UserService 객체 (JWT 생성 및 로그인 응답 생성)
-        Returns:
-            LoginResponse: 사용자 정보와 JWT access_token 포함된 응답 반환
-
-        Note: 로그인 로직 미완성
-        """
-        # Get google user info
-        user_info = await self.get_user_info(code)
-
-        # Validate user
-        user = await self._validate_user_info(session, user_info)
-
-        if user:
-            # Process login for existing social user
-            return await user_service._generate_login_response(response, user)
-
-        # Register new social user with issue jwt
-        social_user = await self.register_social_user(session, user_info)
-        return await user_service._generate_login_response(response, social_user)
+        return await self.social_user_repository.create(session, **social_user_register_data.model_dump())
 
